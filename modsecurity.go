@@ -18,6 +18,7 @@ type Config struct {
 	TimeoutMillis  int64  `json:"timeoutMillis"`
 	ModSecurityUrl string `json:"modSecurityUrl,omitempty"`
 	MaxBodySize    int64  `json:"maxBodySize"`
+	wafHeader      string `json:"wafHeader"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -39,6 +40,7 @@ type Modsecurity struct {
 	name           string
 	httpClient     *http.Client
 	logger         *log.Logger
+	wafHeader      string
 }
 
 // New created a new Modsecurity plugin.
@@ -62,6 +64,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		name:           name,
 		httpClient:     &http.Client{Timeout: timeout},
 		logger:         log.New(os.Stdout, "", log.LstdFlags),
+		wafHeader:      config.wafHeader,
 	}, nil
 }
 
@@ -116,10 +119,24 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	//Process response here
+	//Waf status code > 300, has to use location header field to redirect to that url
+	if resp.StatusCode >= 300 {
+		wafLoc := resp.Header["Location"]
+		new_url := fmt.Sprintf("%s%s", wafLoc, req.RequestURI)
+		wafProxyReq, _ := http.NewRequest(req.Method, new_url, req.Body)
+		wafProxyReq.Header = req.Header
+		a.next.ServeHTTP(rw, wafProxyReq)
+		return
+	}
+
+	//Waf status code > 400; > 500
 	if resp.StatusCode >= 400 {
 		forwardResponse(resp, rw)
 		return
 	}
+
+	req.Header.Add(a.wafHeader, resp.Body)
 
 	a.next.ServeHTTP(rw, req)
 }
