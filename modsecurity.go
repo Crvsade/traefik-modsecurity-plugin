@@ -135,6 +135,8 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		forwardResponse(resp, rw)
 		return
 	}
+
+	//Add to the request header the new field from waf
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(resp.Body)
 	respString := buf.String()
