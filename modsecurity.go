@@ -135,8 +135,10 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		forwardResponse(resp, rw)
 		return
 	}
-
-	req.Header.Add(a.wafHeader, resp.Body)
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	respString := buf.String()
+	req.Header.Add(a.wafHeader, respString)
 
 	a.next.ServeHTTP(rw, req)
 }
