@@ -4,6 +4,7 @@ package traefik_modsecurity_plugin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -18,7 +19,31 @@ type Config struct {
 	TimeoutMillis  int64  `json:"timeoutMillis"`
 	ModSecurityUrl string `json:"modSecurityUrl,omitempty"`
 	MaxBodySize    int64  `json:"maxBodySize"`
-	wafHeader      string `json:"wafHeader"`
+	wafHeader      string
+}
+
+type log_t struct {
+	Message   string    `json:"message"`
+	Context   context_t `json:"context"`
+	Severity  string    `json:"severity"`
+	Timestamp string    `json:"timestamp"`
+}
+
+type context_t struct {
+	Secure     string `json:"secure"`
+	Ip         string `json:"ip"`
+	UserHost   string `json:"userHost"`
+	UserAgent  string `json:"userAgent"`
+	Referer    string `json:"referer"`
+	Method     string `json:"method"`
+	Host       string `json:"host"`
+	Uri        string `json:"uri"`
+	KnownBot   string `json:"knownBot"`
+	IsAsset    string `json:"isAsset"`
+	IsInternal string `json:"isInternal"`
+	WafMessage string `json:"wafMessage"`
+	WafReason  string `json:"wafReason"`
+	Device     string `json:"device"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -121,17 +146,46 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	//Process response here
 	//Waf status code > 300, has to use location header field to redirect to that url
-	if resp.StatusCode >= 300 {
-		wafLoc := resp.Header["Location"]
-		new_url := fmt.Sprintf("%s%s", wafLoc, req.RequestURI)
-		wafProxyReq, _ := http.NewRequest(req.Method, new_url, req.Body)
-		wafProxyReq.Header = req.Header
-		a.next.ServeHTTP(rw, wafProxyReq)
-		return
+
+	jsonString, _ := json.Marshal(resp.Header[a.wafHeader])
+	var wafHeaderJson map[string]string
+	err = json.Unmarshal([]byte(jsonString), &wafHeaderJson)
+
+	secure := "false"
+	if req.TLS != nil {
+		secure = "true"
 	}
 
-	//Waf status code > 400; > 500
-	if resp.StatusCode >= 400 {
+	context := context_t{
+		Secure:     secure,
+		Ip:         req.RemoteAddr,
+		UserHost:   wafHeaderJson["userHost"],
+		UserAgent:  req.Header.Get("User-Agent"),
+		Referer:    req.Referer(),
+		Method:     req.Method,
+		Host:       req.Host,
+		Uri:        req.RequestURI,
+		KnownBot:   wafHeaderJson["knownBot"],
+		IsAsset:    wafHeaderJson["isAsset"],
+		IsInternal: wafHeaderJson["wafInternal"],
+		WafMessage: wafHeaderJson["wafMessage"],
+		WafReason:  wafHeaderJson["wafReason"],
+		Device:     wafHeaderJson["device"],
+	}
+
+	log := log_t{
+		Message:   "Connection",
+		Context:   context,
+		Severity:  "INFO",
+		Timestamp: time.Now().String(),
+	}
+
+	log_json, _ := json.Marshal(log)
+	fmt.Printf(string(log_json))
+
+	if (resp.StatusCode >= 300) && (resp.StatusCode < 599) {
+
+		resp.Header.Del(a.wafHeader)
 		forwardResponse(resp, rw)
 		return
 	}
